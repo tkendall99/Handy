@@ -961,7 +961,7 @@ streamTextEvent: "stream-text-event"
 
 /** user-defined types **/
 
-export type AppCategory = "personal_messages" | "work_messages" | "email" | "documents" | "coding" | "other"
+export type AppCategory = "personal_messages" | "work_messages" | "email" | "documents" | "ai_assistants" | "coding" | "other"
 /**
  * The container-level `serde(default)` (backed by the `Default` impl below)
  * guarantees every field — including ones added in the future — falls back to
@@ -1206,12 +1206,8 @@ export type StreamTextEvent = { committed: string; tentative: string }
  * Semantic kind of "working" phase, used to localize the spinner label.
  */
 export type StreamWorkKind = "transcribing" | "polishing"
-export type StylesCatalog = { known_apps: KnownApp[]; last_app: FrontApp | null }
-export type StylesSettings = { enabled: boolean; 
-/**
- * Key that, pressed while the dictation key is held, turns on Styles.
- */
-chord_key: string; category_styles: Partial<{ [key in AppCategory]: WritingStyle }>; 
+export type StylesCatalog = { known_apps: KnownApp[]; last_app: FrontApp | null; last_app_builtin_category: AppCategory | null }
+export type StylesSettings = { enabled: boolean; category_styles: Partial<{ [key in AppCategory]: WritingStyle }>; 
 /**
  * User overrides of the built-in app table: bundle ID -> category.
  */

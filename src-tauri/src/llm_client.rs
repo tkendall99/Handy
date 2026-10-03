@@ -192,11 +192,19 @@ fn build_headers(provider: &PostProcessProvider, api_key: &str) -> Result<Header
     Ok(headers)
 }
 
+/// A dictation waits on this request, so fail fast and fall back to the raw
+/// transcript: with no timeout an unreachable host (e.g. no network right
+/// after login) left the overlay stuck "Formatting" for 30s or more.
+const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// Create an HTTP client with provider-specific headers
 fn create_client(provider: &PostProcessProvider, api_key: &str) -> Result<reqwest::Client, String> {
     let headers = build_headers(provider, api_key)?;
     reqwest::Client::builder()
         .default_headers(headers)
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(REQUEST_TIMEOUT)
         .build()
         .map_err(|e| report_reqwest_error("Failed to build HTTP client", &e))
 }

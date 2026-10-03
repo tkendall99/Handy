@@ -32,18 +32,6 @@ pub fn handle_shortcut_event(
     hotkey_string: &str,
     is_pressed: bool,
 ) {
-    // Rocket Styles: the chord key is only registered while the plain
-    // dictation key is held; pressing it marks the recording for Styles.
-    if binding_id == crate::styles::CHORD_BINDING_ID {
-        if is_pressed {
-            crate::styles::request_styles(app);
-        }
-        return;
-    }
-    if binding_id == "transcribe" {
-        crate::styles::on_dictation_key(app, is_pressed);
-    }
-
     let settings = get_settings(app);
 
     // Transcribe bindings are handled by the coordinator.

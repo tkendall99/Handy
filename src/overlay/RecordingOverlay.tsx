@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import "./RecordingOverlay.css";
 import { commands, events } from "@/bindings";
 import type {
+  AppCategory,
   StreamPhase,
   StreamPhaseEvent,
   StreamTextEvent,
@@ -16,11 +17,71 @@ import { getLanguageDirection } from "@/lib/utils/rtl";
 type OverlayState = "recording" | "streaming" | "transcribing" | "processing";
 
 // Rocket Styles: sent when the chord key marks this recording for Styles.
-type StylesActive = { style: WritingStyle; app_name: string };
+type StylesActive = {
+  style: WritingStyle;
+  category: AppCategory;
+  app_name: string;
+};
 
-// Number of reactive bars in the waveform (the simple, smoothed style shared by
-// every overlay form). Mic levels arrive as 16 FFT buckets; we take the first N.
-const WAVE_BARS = 9;
+// The live trace plots the mic level over the last ~2.4s (levels arrive at
+// ~30/s). Its viewBox is 100 x TRACE_H; the line rests on TRACE_BASE when silent.
+const TRACE_POINTS = 72;
+const TRACE_H = 20;
+const TRACE_BASE = 17;
+const TRACE_PEAK = 3;
+
+const traceY = (amp: number) => TRACE_BASE - amp * (TRACE_BASE - TRACE_PEAK);
+
+/** Smooth path through evenly spaced samples (Catmull-Rom as cubic Béziers). */
+const tracePath = (amps: number[]): string => {
+  const step = 100 / (amps.length - 1);
+  const pts = amps.map((a, i) => [i * step, traceY(a)] as const);
+  let d = `M${pts[0][0]} ${pts[0][1].toFixed(2)}`;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const [x0, y0] = pts[Math.max(i - 1, 0)];
+    const [x1, y1] = pts[i];
+    const [x2, y2] = pts[i + 1];
+    const [x3, y3] = pts[Math.min(i + 2, pts.length - 1)];
+    const c1x = x1 + (x2 - x0) / 6;
+    const c1y = y1 + (y2 - y0) / 6;
+    const c2x = x2 - (x3 - x1) / 6;
+    const c2y = y2 - (y3 - y1) / 6;
+    d += ` C${c1x.toFixed(2)} ${c1y.toFixed(2)} ${c2x.toFixed(2)} ${c2y.toFixed(2)} ${x2.toFixed(2)} ${y2.toFixed(2)}`;
+  }
+  return d;
+};
+
+/** Rocket's mark: an ascent arc ending in the vehicle. The dot doubles as the
+ *  capture light — dim while the mic arms, Rocket orange once samples flow. */
+const RocketMark: React.FC<{ ready: boolean }> = ({ ready }) => (
+  <svg
+    className={`hud-mark ${ready ? "ready" : ""}`}
+    viewBox="0 0 16 16"
+    aria-hidden="true"
+  >
+    <defs>
+      <linearGradient
+        id="hud-mark-arc"
+        gradientUnits="userSpaceOnUse"
+        x1="3"
+        y1="15"
+        x2="12"
+        y2="4"
+      >
+        <stop offset="0" stopColor="currentColor" stopOpacity="0.15" />
+        <stop offset="1" stopColor="currentColor" stopOpacity="0.95" />
+      </linearGradient>
+    </defs>
+    <path
+      d="M3 15.2C3 9.6 6.3 5.2 11.4 4.3"
+      fill="none"
+      stroke="url(#hud-mark-arc)"
+      strokeWidth="1.9"
+      strokeLinecap="round"
+    />
+    <circle className="hud-mark-dot" cx="12.6" cy="4.1" r="2.2" />
+  </svg>
+);
 
 const RecordingOverlay: React.FC = () => {
   const { t } = useTranslation();
@@ -30,7 +91,9 @@ const RecordingOverlay: React.FC = () => {
   // Stay visually in an arming state until the backend processes the first
   // actual microphone sample chunk.
   const [captureReady, setCaptureReady] = useState(false);
-  const [levels, setLevels] = useState<number[]>(Array(WAVE_BARS).fill(0));
+  const [trace, setTrace] = useState<number[]>(() =>
+    Array(TRACE_POINTS).fill(0),
+  );
   const [streamText, setStreamText] = useState<StreamTextEvent>({
     committed: "",
     tentative: "",
@@ -49,7 +112,7 @@ const RecordingOverlay: React.FC = () => {
   // while overflowing, so the resting first line stays crisp flush under the pill.
   const [overflowing, setOverflowing] = useState(false);
 
-  const smoothedLevelsRef = useRef<number[]>(Array(16).fill(0));
+  const levelRef = useRef(0);
   // Live-text scroll-back: the text region "sticks" to the newest line while the
   // user is at the bottom; if they scroll up to read history, auto-follow pauses
   // until they scroll back down.
@@ -66,10 +129,10 @@ const RecordingOverlay: React.FC = () => {
         // them would overwrite that event and leave the overlay stuck arming.
         if (overlayState === "recording" || overlayState === "streaming") {
           setCaptureReady(false);
-          smoothedLevelsRef.current = Array(16).fill(0);
-          setLevels(Array(WAVE_BARS).fill(0));
+          levelRef.current = 0;
+          setTrace(Array(TRACE_POINTS).fill(0));
           setStreamText({ committed: "", tentative: "" });
-          setStylesActive(null);
+          setElapsed(0);
         }
 
         await syncLanguageFromSettings();
@@ -89,15 +152,17 @@ const RecordingOverlay: React.FC = () => {
         if (overlayState === "streaming") {
           setPhase("listening");
           setWorkKind("transcribing");
-          setElapsed(0);
           setSession((s) => s + 1); // remount the card fresh for this session
         }
         setIsVisible(true);
       });
 
+      // The Styles label for a recording is sent as it starts, which can land
+      // before its show-overlay, so it's cleared when the overlay hides.
       const unlistenHide = await listen("hide-overlay", () => {
         setIsVisible(false);
         setCaptureReady(false);
+        setStylesActive(null);
       });
 
       const unlistenReady = await listen("recording-ready", () => {
@@ -106,15 +171,15 @@ const RecordingOverlay: React.FC = () => {
       });
 
       const unlistenLevel = await listen<number[]>("mic-level", (event) => {
-        const newLevels = event.payload as number[];
-        // Exponential smoothing across the 16 buckets, then take the first N
-        // bars for the shared waveform.
-        const smoothed = smoothedLevelsRef.current.map((prev, i) => {
-          const target = newLevels[i] || 0;
-          return prev * 0.7 + target * 0.3;
-        });
-        smoothedLevelsRef.current = smoothed;
-        setLevels(smoothed.slice(0, WAVE_BARS));
+        // 16 FFT buckets; the lower ones carry speech. Blend mean and peak so
+        // both steady and plosive sounds register, then ease toward it.
+        const voice = (event.payload as number[]).slice(0, 10);
+        const mean = voice.reduce((sum, v) => sum + (v || 0), 0) / voice.length;
+        const peak = Math.max(...voice.map((v) => v || 0));
+        const target = Math.min(1, Math.pow((mean + peak) / 2, 0.7) * 1.15);
+        levelRef.current = levelRef.current * 0.45 + target * 0.55;
+        const level = levelRef.current;
+        setTrace((prev) => [...prev.slice(1), level]);
       });
 
       const unlistenStyles = await listen<StylesActive>(
@@ -147,11 +212,13 @@ const RecordingOverlay: React.FC = () => {
   }, []);
 
   // Elapsed capture timer starts only once microphone samples are flowing.
+  const listening =
+    state === "recording" || (state === "streaming" && phase !== "working");
   useEffect(() => {
-    if (state !== "streaming" || !isVisible || !captureReady) return;
+    if (!listening || !isVisible || !captureReady) return;
     const id = setInterval(() => setElapsed((e) => e + 1), 1000);
     return () => clearInterval(id);
-  }, [state, isVisible, captureReady]);
+  }, [listening, isVisible, captureReady]);
 
   // Stick to the bottom as text streams in — but only while pinned, so a user who
   // has scrolled up to read history isn't yanked back down by the next chunk.
@@ -181,113 +248,123 @@ const RecordingOverlay: React.FC = () => {
   const fmtTime = (s: number) =>
     `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 
-  const styleLabel = stylesActive
-    ? t(`settings.styles.style.${stylesActive.style}.label`)
-    : "";
-  // While the AI pass runs, name the style and the app it was picked for.
-  const stylingLabel = stylesActive
-    ? stylesActive.app_name
-      ? t("overlay.styling", {
-          style: styleLabel,
-          app: stylesActive.app_name,
-        })
-      : styleLabel
-    : null;
-
   // ---- Shared building blocks (one visual language for every overlay form) ----
-  const waveform = (
-    <div className={`swave ${captureReady ? "ready" : "arming"}`}>
-      {levels.map((v, i) => (
-        <i
-          key={i}
-          style={{
-            height: `${Math.max(3, Math.min(18, 3 + Math.pow(v, 0.7) * 15))}px`,
-          }}
-        />
-      ))}
+
+  // Styles context: the style, the app it was picked for, and that app's kind.
+  const contextRow = stylesActive && (
+    <div className="hud-context">
+      <span className="hud-style">
+        {t(`settings.styles.style.${stylesActive.style}.label`)}
+      </span>
+      {stylesActive.app_name && (
+        <span className="hud-app">{stylesActive.app_name}</span>
+      )}
+      <span className="hud-category">
+        {t(`settings.styles.category.${stylesActive.category}`)}
+      </span>
     </div>
   );
 
   const cancelBtn = (
     <button
-      className="sx"
+      className="hud-cancel"
       aria-label="cancel"
       onClick={() => commands.cancelOperation()}
     >
       <svg viewBox="0 0 16 16" aria-hidden="true">
         <path
-          d="M4 4 L12 12 M12 4 L4 12"
+          d="M5 5 L11 11 M11 5 L5 11"
           stroke="currentColor"
-          strokeWidth="1.6"
+          strokeWidth="1.5"
           strokeLinecap="round"
         />
       </svg>
     </button>
   );
 
-  // dot (left) | waveform (center) | timer + cancel (right) — same structure for
-  // pill & panel, so the Live morph is a pure width change.
-  const listeningRow = (showTimer: boolean, showCancel: boolean) => (
-    <div className="sbase">
-      <div className="sbase-l">
-        {stylesActive ? (
-          <span className={`sstyle ${captureReady ? "ready" : "arming"}`}>
-            <svg viewBox="0 0 16 16" aria-hidden="true">
-              <path
-                d="M8 1.5 9.4 6.6 14.5 8 9.4 9.4 8 14.5 6.6 9.4 1.5 8 6.6 6.6Z"
-                fill="currentColor"
-              />
-            </svg>
-            {styleLabel}
-          </span>
-        ) : (
-          <span className={`sdot ${captureReady ? "ready" : "arming"}`} />
-        )}
+  // mark | live trace | timer | cancel
+  const listeningRow = (
+    <div className="hud-row">
+      <RocketMark ready={captureReady} />
+      <div className={`hud-trace ${captureReady ? "" : "arming"}`}>
+        <svg viewBox={`0 0 100 ${TRACE_H}`} preserveAspectRatio="none">
+          <defs>
+            <linearGradient
+              id="hud-contrail"
+              gradientUnits="userSpaceOnUse"
+              x1="0"
+              y1="0"
+              x2="100"
+              y2="0"
+            >
+              <stop offset="0" stopColor="currentColor" stopOpacity="0" />
+              <stop offset="0.6" stopColor="currentColor" stopOpacity="0.45" />
+              <stop offset="1" stopColor="currentColor" stopOpacity="1" />
+            </linearGradient>
+          </defs>
+          <path
+            d={tracePath(trace)}
+            fill="none"
+            stroke="url(#hud-contrail)"
+            strokeWidth="1.5"
+            strokeLinejoin="round"
+            vectorEffect="non-scaling-stroke"
+          />
+        </svg>
+        <span
+          className="hud-trace-head"
+          style={{
+            top: `${(traceY(trace[trace.length - 1]) / TRACE_H) * 100}%`,
+          }}
+        />
       </div>
-      {waveform}
-      <div className="sbase-r">
-        {showTimer && <span className="stimer">{fmtTime(elapsed)}</span>}
-        {showCancel && cancelBtn}
-      </div>
+      <span className="hud-timer">{fmtTime(elapsed)}</span>
+      {cancelBtn}
     </div>
   );
 
-  // spinner (left) | label (center) | cancel (right) — same 3-zone grid as the
-  // listening row, so the label is centered.
-  const workingRow = (label: string, showCancel: boolean) => (
-    <div className="sbase">
-      <div className="sbase-l">
-        <span className="sspinner" />
+  // mark | label | comet | cancel
+  const workingRow = (label: string) => (
+    <div className="hud-row working">
+      <RocketMark ready={true} />
+      <span className="hud-label">{label}</span>
+      <div className="hud-comet">
+        <i />
       </div>
-      <span className="swork-label">{label}</span>
-      <div className="sbase-r">{showCancel && cancelBtn}</div>
+      {cancelBtn}
     </div>
   );
 
-  // ---- Live overlay: a pill that sculpts open into a panel ----
+  const polishLabel = stylesActive
+    ? t("overlay.formatting")
+    : t("overlay.processing");
+
+  // ---- Live overlay: a pill that opens into a panel as text streams in ----
   if (state === "streaming") {
     const hasText =
       streamText.committed.length > 0 || streamText.tentative.length > 0;
     const working = phase === "working";
-    // Keep the panel open whenever there's text — even while finalizing — so the
-    // transcript stays put under a working spinner instead of collapsing and
-    // squishing the text mid-stream. Only fall back to the small working pill
-    // when there was no text to preserve.
-    const open = hasText;
-    const collapsed = working && !hasText;
 
     return (
       <div dir={direction} className={`ov-stage ${position}`}>
         <div
           key={session}
-          className={`scard ${open ? "open" : ""} ${collapsed ? "working" : ""} ${
+          className={`hud live ${hasText ? "open" : ""} ${
             stylesActive ? "styled" : ""
-          } ${isVisible ? "" : "leaving"}`}
+          }`}
         >
-          <div className="stext">
-            <div className="stext-clip">
+          {working
+            ? workingRow(
+                workKind === "polishing"
+                  ? polishLabel
+                  : t("overlay.transcribing"),
+              )
+            : listeningRow}
+          {contextRow}
+          <div className="hud-text">
+            <div className="hud-text-clip">
               <div
-                className={`stext-cap ${overflowing ? "overflowing" : ""}`}
+                className={`hud-text-cap ${overflowing ? "overflowing" : ""}`}
                 ref={capRef}
                 onScroll={handleStreamScroll}
               >
@@ -296,46 +373,30 @@ const RecordingOverlay: React.FC = () => {
                     {streamText.committed ? streamText.committed + " " : ""}
                   </span>
                   <span className="tentative">{streamText.tentative}</span>
-                  {/* Drop the blinking caret once finalizing — it's no longer
-                      capturing, and a static spinner conveys the work. */}
-                  {!working && <span className="scaret" />}
+                  {!working && <span className="hud-caret" />}
                 </p>
               </div>
             </div>
           </div>
-          {working
-            ? workingRow(
-                workKind === "polishing"
-                  ? (stylingLabel ?? t("overlay.processing"))
-                  : t("overlay.transcribing"),
-                true,
-              )
-            : listeningRow(open, true)}
         </div>
       </div>
     );
   }
 
-  // ---- Minimal overlay: exactly one row at a time — waveform (recording), or a
-  // spinner + label (transcribing / processing). Never both. The pill animates its
-  // width between them; the cancel button is in both rows so it stays put.
+  // ---- Minimal overlay: one row — the live trace while recording, or a label
+  // with a travelling comet while transcribing / formatting.
   const working = state === "transcribing" || state === "processing";
   const workLabel =
-    state === "processing"
-      ? (stylingLabel ?? t("overlay.processing"))
-      : t("overlay.transcribing");
+    state === "processing" ? polishLabel : t("overlay.transcribing");
 
   return (
     <div
       dir={direction}
       className={`ov-stage ${position} ov-fade ${isVisible ? "show" : ""}`}
     >
-      <div
-        className={`scard compact ${working && isVisible ? "cworking" : ""} ${
-          stylesActive ? "styled" : ""
-        }`}
-      >
-        {working ? workingRow(workLabel, true) : listeningRow(false, true)}
+      <div className={`hud compact ${stylesActive ? "styled" : ""}`}>
+        {working ? workingRow(workLabel) : listeningRow}
+        {contextRow}
       </div>
     </div>
   );

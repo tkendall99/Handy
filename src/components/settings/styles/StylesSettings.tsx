@@ -24,6 +24,7 @@ const CATEGORIES: AppCategory[] = [
   "work_messages",
   "email",
   "documents",
+  "ai_assistants",
   "coding",
   "other",
 ];
@@ -38,7 +39,6 @@ const STYLES: WritingStyle[] = [
 
 const DEFAULT_STYLES: StylesSettingsValue = {
   enabled: true,
-  chord_key: "1",
   category_styles: {},
   app_categories: {},
 };
@@ -93,11 +93,12 @@ export const StylesSettings: React.FC = () => {
     if (catalog?.last_app) {
       names.set(catalog.last_app.bundle_id, catalog.last_app.name);
     }
-    const grouped = new Map<AppCategory, string[]>();
+    // Some apps ship under several IDs (ChatGPT), so list each name once.
+    const grouped = new Map<AppCategory, Set<string>>();
     for (const [bundleId, category] of categoryOf) {
-      const list = grouped.get(category) ?? [];
-      list.push(names.get(bundleId) ?? bundleId);
-      grouped.set(category, list);
+      const set = grouped.get(category) ?? new Set<string>();
+      set.add(names.get(bundleId) ?? bundleId);
+      grouped.set(category, set);
     }
     return grouped;
   }, [catalog, styles.app_categories]);
@@ -105,8 +106,7 @@ export const StylesSettings: React.FC = () => {
   const lastApp = catalog?.last_app ?? null;
   const lastAppCategory: AppCategory | null = lastApp
     ? (styles.app_categories[lastApp.bundle_id] ??
-      catalog?.known_apps.find((app) => app.bundle_id === lastApp.bundle_id)
-        ?.category ??
+      catalog?.last_app_builtin_category ??
       "other")
     : null;
   const lastAppOverridden =
@@ -133,7 +133,6 @@ export const StylesSettings: React.FC = () => {
           label={t("settings.styles.enabled.label")}
           description={t("settings.styles.enabled.description", {
             dictationKey: formatKeyCombination(dictationKey, osType),
-            chordKey: formatKeyCombination(styles.chord_key, osType),
           })}
           descriptionMode="inline"
           grouped={true}

@@ -1,515 +1,347 @@
-@import "../styles/theme.css";
+/* Rocket recording HUD.
+ *
+ * A dark flight-telemetry capsule that reads as part of the Mac (like the
+ * island around the notch) in any app theme. One signature: the voice trace —
+ * a single line plotting mic level over the last ~2.4s, fading toward its tail
+ * like a contrail — echoed by the Rocket mark (an ascent arc ending in the
+ * vehicle). Orange is spent only on the mark's light and the Styles name.
+ */
 
 :root {
-  --s-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  /* Near-opaque app surface (theme.css --color-background at 98%). Auto-flips
-     light/dark with --color-background, so no dark-mode override is needed. */
-  --s-surface: color-mix(in srgb, var(--color-background) 98%, transparent);
-  /* Accent = logo orange; flips automatically via --color-logo-primary. */
-  --s-accent: var(--color-logo-primary);
-  /* Light/dark pairs for the tokens that can't flip through a shared palette
-     variable on their own. Same shape as theme.css: each value is written once
-     here, and the active token below is re-pointed by the media query or by the
-     `data-theme` overrides. */
-  --light-s-accent-soft: color-mix(
-    in srgb,
-    var(--color-background-ui) 16%,
-    transparent
-  );
-  /* Dark uses the logo orange — reads better on the dark surface than the
-     deeper UI orange. */
-  --dark-s-accent-soft: color-mix(
-    in srgb,
-    var(--color-logo-primary) 20%,
-    transparent
-  );
-  /* Neutrals. muted/faint are overlay-specific secondary/tertiary text grays
-     (no theme equivalent). */
-  --light-s-muted: #6e6e6e;
-  --dark-s-muted: #a3a09a;
-  --light-s-faint: #9a9a9a;
-  --dark-s-faint: #6f6c66;
-  /* Hairlines reuse the app's mid-gray at low opacity in light — same vocabulary
-     as the app's border-mid-gray/* utilities — and flip to the near-white text
-     token for contrast on dark. */
-  --light-s-border: color-mix(in srgb, var(--color-mid-gray) 22%, transparent);
-  --dark-s-border: color-mix(in srgb, var(--color-text) 12%, transparent);
-  --light-s-hair: color-mix(in srgb, var(--color-mid-gray) 12%, transparent);
-  --dark-s-hair: color-mix(in srgb, var(--color-text) 8%, transparent);
+  /* Palette */
+  --hud-hull: rgba(15, 17, 23, 0.96); /* surface */
+  --hud-edge: rgba(255, 255, 255, 0.09); /* hairline border */
+  --hud-divider: rgba(255, 255, 255, 0.07);
+  --hud-ink: #eceef2; /* primary text, trace */
+  --hud-ink-2: #959ba6; /* secondary text, timer */
+  --hud-ink-3: #4d535d; /* idle / arming */
+  --hud-plume: #f26b3a; /* Rocket orange */
 
-  /* Active neutrals — default light, flipped by the media query below or forced
-     by `data-theme`. */
-  --s-accent-soft: var(--light-s-accent-soft);
-  --s-muted: var(--light-s-muted);
-  --s-faint: var(--light-s-faint);
-  --s-border: var(--light-s-border);
-  --s-hair: var(--light-s-hair);
+  /* Type */
+  --hud-font:
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto,
+    sans-serif;
+  --hud-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 
-  /* Card geometry — single source of truth for the visible overlay sizes. The
-     native overlay window (overlay.rs) is sized from these: it must be at least
-     the card's max footprint (--ov-work-w for compact, --ov-open-w for Live),
-     since the card is anchored flush to the screen edge in CSS. Keep overlay.rs
-     in sync when these change. */
-  --ov-rest-w: 172px; /* resting compact pill (minimal, recording) -- roomy enough
-                         for the English working label before the grow starts */
-  --ov-pill-w: 184px; /* base width / Live pill before it opens or collapses */
-  --ov-work-w: 216px;
-  --ov-styled-w: 236px; /* Rocket Styles: room for the style badge; must stay
-                           within the compact window width in overlay.rs */ /* working pill (transcribing / polishing) -- wide enough to
-                         center longer labels; shared by Live (collapsed) + minimal */
-  --ov-open-w: 392px; /* Live panel, expanded */
-  --ov-base-h: 40px; /* control-row height (.sbase) */
-  --ov-cap-max-h: 64px; /* max height of the scrolling live-text region */
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --s-accent-soft: var(--dark-s-accent-soft);
-    --s-muted: var(--dark-s-muted);
-    --s-faint: var(--dark-s-faint);
-    --s-border: var(--dark-s-border);
-    --s-hair: var(--dark-s-hair);
-  }
+  /* Geometry — overlay.rs sizes the native window from these; keep in sync. */
+  --hud-w: 228px; /* plain capsule */
+  --hud-w-styled: 304px; /* with the Styles row */
+  --hud-w-open: 392px; /* Live panel showing text */
+  --hud-row-h: 36px;
+  --hud-context-h: 26px;
+  --hud-text-max-h: 72px;
 }
 
-/*
- * Explicit theme override, matching the `data-theme` blocks in theme.css.
- * `--s-surface` and `--s-accent` honour the setting for free because they derive
- * from shared palette tokens, but the neutrals above are chosen here, so without
- * this block a forced theme on a differently-themed OS mixes the two — e.g. dark
- * surface with light-theme secondary text at ~2.8:1 contrast. macOS masks that
- * (setting the app appearance flips the webview's `prefers-color-scheme` to
- * match), so this is what Windows and Linux need.
- */
-:root[data-theme="light"] {
-  --s-accent-soft: var(--light-s-accent-soft);
-  --s-muted: var(--light-s-muted);
-  --s-faint: var(--light-s-faint);
-  --s-border: var(--light-s-border);
-  --s-hair: var(--light-s-hair);
-}
-
-:root[data-theme="dark"] {
-  --s-accent-soft: var(--dark-s-accent-soft);
-  --s-muted: var(--dark-s-muted);
-  --s-faint: var(--dark-s-faint);
-  --s-border: var(--dark-s-border);
-  --s-hair: var(--dark-s-hair);
-}
-
-/* ============================================================
-   Unified overlay stage — one fixed, transparent container shared by the compact
-   pill and the Live panel (both render the same `.scard` base). The card is
-   anchored flush to the screen-edge side (bottom by default, top when placed up
-   top) and centered horizontally, so the visible card sits exactly
-   OVERLAY_*_OFFSET from the screen edge regardless of window height — only the
-   offsets in overlay.rs move it. Pops scale from that edge, so the card is never
-   drawn past it (matters for the 4px top offset on Windows/Linux).
-   ============================================================ */
+/* ---- Stage: the card sits flush to the screen-edge side, centred ---- */
 .ov-stage {
   position: fixed;
   inset: 0;
   display: flex;
-  justify-content: center; /* horizontal centering, kept for both forms */
-  align-items: flex-end; /* bottom placement: flush to the bottom edge */
-  font-family: var(--s-font);
+  justify-content: center;
+  align-items: flex-end;
+  font-family: var(--hud-font);
+  -webkit-font-smoothing: antialiased;
 }
 .ov-stage.top {
-  align-items: flex-start; /* top placement: flush to the top edge */
+  align-items: flex-start;
 }
-
-/* Compact pill: fade the whole container in/out (the pill itself never pops or
-   morphs). */
 .ov-fade {
   opacity: 0;
-  transition: opacity 200ms ease-out;
+  transition: opacity 180ms ease-out;
 }
 .ov-fade.show {
   opacity: 1;
 }
 
-/* Top placement, Live panel: stack the control pill above the text region so the
-   card grows downward from its top edge (oldest line under the pill, newest at
-   the bottom) — mirroring the bottom overlay's upward flow. The compact pill has
-   no flowing text, so this only affects the Live panel. The text region keeps the
-   same fade + scroll-pin; older lines dissolve up under the pill. */
-.ov-stage.top .scard {
-  /* column-reverse stacks the control pill above the text region. */
+/* ---- Card ---- */
+.hud {
+  /* DOM order is row, Styles context, live text: top placement reads in that
+     order away from the screen edge; bottom placement mirrors it. */
+  display: flex;
   flex-direction: column-reverse;
+  flex: none;
+  width: var(--hud-w);
+  max-width: calc(100vw - 2px);
+  overflow: hidden;
+  color: var(--hud-ink);
+  background: var(--hud-hull);
+  border: 1px solid var(--hud-edge);
+  border-radius: 19px;
+  box-shadow: 0 6px 16px -6px rgba(0, 0, 0, 0.5);
+  transform-origin: bottom center;
+  animation: hud-in 240ms cubic-bezier(0.22, 1, 0.36, 1);
+  transition:
+    width 360ms cubic-bezier(0.22, 1, 0.36, 1),
+    border-radius 360ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.ov-stage.top .hud {
+  flex-direction: column;
   transform-origin: top center;
 }
-.ov-stage.top .stext-cap {
-  /* Mirror of the bottom overlay (top: 12 / bottom: 0): the first line sits flush
-     under the pill and the breathing room moves below the text. The top fade is
-     off at rest — at zero top padding it would dim the resting first line — and
-     switches on (below) only once text overflows. */
-  padding-top: 0;
-  padding-bottom: 12px;
-  -webkit-mask-image: none;
-  mask-image: none;
-}
-/* Once live text overflows, fade older lines up under the pill, matching the
-   bottom overlay's top fade. Gated on `.overflowing` so a short resting line
-   (sitting at the very top) is never dimmed. */
-.ov-stage.top .stext-cap.overflowing {
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 18px);
-  mask-image: linear-gradient(to bottom, transparent 0, #000 18px);
-}
-.ov-stage.top .stext-cap p {
-  /* Top-anchor short text just under the pill; on overflow the cap still pins to
-     the bottom (newest visible) and older lines fade off the top, same as bottom. */
-  margin: 0;
-}
-
-/* Shared base card. Flat: theme surface + hairline border, no shadow or blur. */
-.scard {
-  width: var(--ov-pill-w);
-  /* Never wider than the window: an unaccounted content zoom degrades to a
-     narrower card instead of clipping. 2px = our border (no border-box reset). */
-  max-width: calc(100vw - 2px);
-  border-radius: 24px;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  flex: none; /* hold our own width; never let the stage flex shrink the card */
-  transform-origin: bottom center;
-  background: var(--s-surface);
-  border: 1px solid var(--s-border);
-  /* Flat: no drop shadow, no backdrop blur/saturate (was a glassy gradient look). */
-  /* pop-in plays on mount; morph (width/radius) is a transition */
-  animation: scard-pop 460ms cubic-bezier(0.22, 1, 0.36, 1);
-  transition:
-    width 460ms cubic-bezier(0.22, 1, 0.36, 1),
-    border-radius 460ms cubic-bezier(0.22, 1, 0.36, 1);
-  will-change: transform, width, opacity;
-}
-@keyframes scard-pop {
-  from {
-    opacity: 0;
-    /* Scale from the anchored edge (transform-origin) — never translate past it. */
-    transform: scale(0.92);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
-.scard.leaving {
-  opacity: 0;
-  transform: scale(0.96);
-  transition:
-    opacity 240ms ease,
-    transform 300ms ease;
-}
-.scard.open {
-  width: var(--ov-open-w);
+.hud.styled {
+  width: var(--hud-w-styled);
   border-radius: 16px;
 }
-.scard.working {
-  width: var(--ov-work-w);
-  border-radius: 18px;
+.hud.live.open {
+  width: var(--hud-w-open);
+  border-radius: 16px;
+}
+@keyframes hud-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
 }
 
-/* Compact form: two fixed widths so the recording→working change is an animatable
-   width transition (intrinsic max-content can't be transitioned, and every label
-   is short enough to fit the resting pill, so content-sizing produced no visible
-   grow). The resting pill hugs the waveform; the working pill is roomy enough to
-   center the longest label — the .swork-label ellipsis is only a safety net past it. */
-.scard.compact {
-  animation: none;
-  width: var(--ov-rest-w);
-}
-.scard.compact.cworking {
-  width: var(--ov-work-w);
+/* ---- Control row: mark | trace | timer | cancel ---- */
+.hud-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: var(--hud-row-h);
+  flex: none;
+  padding: 0 7px 0 12px;
 }
 
-/* text region — auto-height open via grid-rows trick; region fades as a whole */
-.stext {
+.hud-mark {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  color: var(--hud-ink);
+}
+.hud-mark-dot {
+  fill: var(--hud-ink-3);
+  transition: fill 200ms ease;
+}
+.hud-mark.ready .hud-mark-dot {
+  fill: var(--hud-plume);
+}
+
+.hud-trace {
+  position: relative;
+  flex: 1;
+  min-width: 60px;
+  height: 20px;
+  color: var(--hud-ink);
+  transition: color 200ms ease;
+}
+.hud-trace svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.hud-trace-head {
+  position: absolute;
+  right: -2.5px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  transform: translateY(-50%);
+  transition: top 50ms linear;
+}
+.hud-trace.arming {
+  color: var(--hud-ink-3);
+}
+
+.hud-timer {
+  flex: none;
+  min-width: 28px;
+  text-align: end;
+  font-family: var(--hud-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--hud-ink-2);
+}
+
+.hud-cancel {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--hud-ink-2);
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+}
+.hud-cancel:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--hud-ink);
+}
+.hud-cancel:focus-visible {
+  outline: 1.5px solid var(--hud-plume);
+  outline-offset: 1px;
+}
+.hud-cancel svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* Working: label, then a comet travelling along the line */
+.hud-label {
+  flex: none;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+.hud-comet {
+  position: relative;
+  flex: 1;
+  min-width: 40px;
+  height: 2px;
+  overflow: hidden;
+  border-radius: 1px;
+  background: rgba(255, 255, 255, 0.08);
+}
+.hud-comet i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 40%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(236, 238, 242, 0.65) 82%,
+    var(--hud-plume) 100%
+  );
+  transform: translateX(-100%);
+  animation: hud-comet 1.3s cubic-bezier(0.45, 0, 0.25, 1) infinite;
+}
+@keyframes hud-comet {
+  to {
+    transform: translateX(250%);
+  }
+}
+
+/* ---- Styles context: STYLE  App · Category ---- */
+.hud-context {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: var(--hud-context-h);
+  flex: none;
+  padding: 0 14px 1px;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--hud-divider);
+}
+.ov-stage.top .hud-context {
+  border-bottom: 0;
+  border-top: 1px solid var(--hud-divider);
+}
+.hud-style {
+  flex: none;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--hud-plume);
+}
+.hud-app,
+.hud-category {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 11.5px;
+}
+.hud-app {
+  flex: 0 1 auto;
+  font-weight: 500;
+  color: var(--hud-ink);
+}
+.hud-category {
+  flex: 0 10 auto; /* gives way before the app name */
+  color: var(--hud-ink-2);
+}
+.hud-app + .hud-category::before {
+  content: "·";
+  margin-inline-end: 8px;
+  margin-inline-start: -2px;
+  color: var(--hud-ink-2);
+}
+
+/* ---- Live text: opens via the grid-rows trick when text arrives ---- */
+.hud-text {
   display: grid;
   grid-template-rows: 0fr;
   opacity: 0;
   transition:
-    grid-template-rows 440ms cubic-bezier(0.22, 1, 0.36, 1),
-    opacity 260ms ease;
+    grid-template-rows 400ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 240ms ease;
 }
-.scard.open .stext {
+.hud.open .hud-text {
   grid-template-rows: 1fr;
   opacity: 1;
 }
-.stext-clip {
+.hud-text-clip {
   overflow: hidden;
   min-height: 0;
 }
-.stext-cap {
-  /* Vertical counterpart of the .scard clamp: show fewer lines rather than clip.
-     20px = cap padding (12) + card borders (2) + 6px slack for zoom rounding. */
-  max-height: min(var(--ov-cap-max-h), calc(100vh - var(--ov-base-h) - 20px));
+.hud-text-cap {
+  /* Show fewer lines rather than clip when the window is short. */
+  max-height: min(
+    var(--hud-text-max-h),
+    calc(100vh - var(--hud-row-h) - var(--hud-context-h) - 8px)
+  );
   overflow-y: auto;
   overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
-  padding-top: 12px;
-  padding-bottom: 0px;
-  padding-left: 14px;
-  padding-right: 14px;
-  font-size: 15px;
-  font-style: italic;
-  line-height: 1.35;
-  letter-spacing: -0.003em;
-  color: color-mix(in srgb, var(--color-text) 90%, transparent);
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 18px);
-  mask-image: linear-gradient(to bottom, transparent 0, #000 18px);
-  scrollbar-width: none; /* Firefox */
-  -ms-overflow-style: none; /* legacy Edge */
+  padding: 10px 14px 12px;
+  font-size: 13.5px;
+  line-height: 1.45;
+  color: var(--hud-ink);
+  scrollbar-width: none;
 }
-/* Hide the scrollbar (WebKit/Chromium) — scroll-back is signalled by the fade. */
-.stext-cap::-webkit-scrollbar {
+.hud-text-cap::-webkit-scrollbar {
   display: none;
 }
-.stext-cap p {
-  /* Bottom-anchor the text when it's shorter than the viewport, avoiding the
-     justify-content:flex-end overflow bug that makes the top unscrollable. */
+.hud-text-cap.overflowing {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 16px);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 16px);
+}
+.hud-text-cap p {
+  /* Bottom-anchor short text without the flex-end overflow bug. */
   margin: auto 0 0;
 }
-.stext-cap .tentative {
-  color: inherit;
+.hud-text-cap .tentative {
+  color: var(--hud-ink-2);
 }
-.scaret {
+.hud-caret {
   display: inline-block;
   width: 2px;
-  height: 1.02em;
-  translate: 0 3px;
-  margin-left: 1px;
-  background: var(--s-accent);
-  border-radius: 2px;
-  animation: scaret-blink 1.05s steps(1) infinite;
+  height: 1em;
+  margin-inline-start: 1px;
+  translate: 0 2px;
+  border-radius: 1px;
+  background: var(--hud-plume);
+  animation: hud-caret 1.05s steps(1) infinite;
 }
-@keyframes scaret-blink {
+@keyframes hud-caret {
   50% {
     opacity: 0;
   }
 }
 
-/* base row — dot (left) | waveform (center) | timer + cancel (right).
-   Same structure for pill & panel; the dot stays anchored left in both. */
-.sbase {
-  height: var(--ov-base-h);
-  flex: none; /* the control row never squashes; only the text region gives */
-  padding: 0 10px;
-  display: grid;
-  /* Equal side columns (min 22px to hold the cancel button) keep the center item
-     — waveform or label — centered whether the pill is at min width or content-
-     sized. */
-  grid-template-columns: minmax(22px, 1fr) auto minmax(22px, 1fr);
-  align-items: center;
-}
-.sbase-l {
-  display: flex;
-  padding-left: 5px;
-  align-items: center;
-  justify-self: start;
-}
-.sbase-r {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  justify-self: end;
-}
-.sdot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  flex: none;
-  box-sizing: border-box;
-  transition:
-    background-color 180ms ease,
-    opacity 180ms ease;
-}
-.sdot.ready {
-  background: var(--s-accent);
-  opacity: 1;
-  animation: sdot-pulse 1.9s infinite;
-}
-/* A quiet neutral dot while the host has not delivered its first sample yet. */
-.sdot.arming {
-  background: var(--s-muted);
-  opacity: 0.45;
-  animation: none;
-}
-@keyframes sdot-pulse {
-  0% {
-    box-shadow: 0 0 0 0 var(--s-accent-soft);
+@media (prefers-reduced-motion: reduce) {
+  .hud {
+    animation: none;
+    transition: none;
   }
-  70% {
-    box-shadow: 0 0 0 7px transparent;
+  .hud-comet i {
+    animation: none;
+    transform: translateX(75%);
   }
-}
-.stimer {
-  font-size: 12px;
-  color: var(--s-faint);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  opacity: 0;
-  transition: opacity 240ms ease 80ms;
-}
-.scard.open .stimer {
-  opacity: 1;
-}
-
-/* Waveform — reactive only after the first microphone callback. While arming,
-   a muted travelling pulse acknowledges the shortcut without pretending that
-   audio levels are already being received. */
-.swave {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  padding-right: 8px;
-  height: 18px;
-  flex: none;
-}
-.swave i {
-  width: 4px;
-  min-height: 3px;
-  max-height: 18px;
-  border-radius: 2px;
-  background: var(--s-accent);
-  transition:
-    height 80ms linear,
-    background-color 180ms ease,
-    opacity 180ms ease;
-}
-.swave.arming i {
-  height: 6px !important;
-  background: var(--s-muted);
-  opacity: 0.35;
-  animation: swave-arming 900ms ease-in-out infinite;
-}
-.swave.arming i:nth-child(2),
-.swave.arming i:nth-child(8) {
-  animation-delay: 75ms;
-}
-.swave.arming i:nth-child(3),
-.swave.arming i:nth-child(7) {
-  animation-delay: 150ms;
-}
-.swave.arming i:nth-child(4),
-.swave.arming i:nth-child(6) {
-  animation-delay: 225ms;
-}
-.swave.arming i:nth-child(5) {
-  animation-delay: 300ms;
-}
-@keyframes swave-arming {
-  0%,
-  100% {
-    transform: scaleY(0.55);
-    opacity: 0.25;
+  .hud-caret {
+    animation: none;
   }
-  50% {
-    transform: scaleY(1.5);
-    opacity: 0.7;
+  .hud-trace-head {
+    transition: none;
   }
-}
-.sx {
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  flex: none;
-  padding: 0;
-  border: 0;
-  -webkit-appearance: none;
-  appearance: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--s-muted);
-  background: var(--s-hair);
-  cursor: pointer;
-  transition:
-    background-color 150ms ease,
-    color 150ms ease,
-    transform 100ms ease;
-}
-.sx svg {
-  width: 9px;
-  height: 9px;
-  display: block;
-}
-.sx:hover {
-  background: var(--s-accent-soft);
-  color: var(--color-text);
-  transform: scale(1.05);
-}
-.sx:active {
-  transform: scale(0.95);
-}
-
-/* working state (transcribing / polishing) — spinner + label */
-.sspinner {
-  width: 13px;
-  height: 13px;
-  border-radius: 50%;
-  border: 2px solid var(--s-hair);
-  border-top-color: var(--s-accent);
-  animation: sspin 0.7s linear infinite;
-  flex: none;
-}
-@keyframes sspin {
-  to {
-    transform: rotate(1turn);
-  }
-}
-.swork-label {
-  font-size: 12px;
-  color: var(--s-muted);
-  white-space: nowrap;
-  padding: 0 8px; /* breathing room from the spinner / cancel when content-sized */
-  /* Safety net: ellipsize rather than clip if a label exceeds the max pill width. */
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* ---- Rocket Styles: accent outline + style badge for a Styles dictation ---- */
-.scard.styled {
-  border-color: var(--s-accent);
-}
-.scard.compact.styled,
-.scard.styled:not(.open) {
-  width: var(--ov-styled-w);
-}
-/* The badge is wider than the dot it replaces, so let the side columns size to
-   their content and keep the waveform centered in what's left. */
-.scard.styled .sbase {
-  grid-template-columns: auto 1fr auto;
-}
-.scard.styled .swave,
-.scard.styled .swork-label {
-  justify-self: center;
-}
-/* Long app names ("Formal · Microsoft PowerPoint") truncate instead of
-   running into the cancel button. */
-.scard.styled .swork-label {
-  min-width: 0;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.sstyle {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 11px;
-  font-weight: 600;
-  white-space: nowrap;
-  color: var(--s-accent);
-  transition: color 180ms ease;
-}
-.sstyle.arming {
-  color: var(--s-muted);
-}
-.sstyle svg {
-  width: 11px;
-  height: 11px;
-  flex: none;
 }

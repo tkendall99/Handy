@@ -1,28 +1,18 @@
 //! Rocket "Styles": format a dictation to suit the app it is typed into.
 //!
-//! The plain dictation key (e.g. `§`) records and pastes the raw transcript.
-//! Pressing the chord key (`1` by default) while the dictation key is held
-//! marks that recording for Styles: the transcript then goes through the AI
-//! pass with a style chosen from the app that was frontmost when recording
-//! started (casual for messaging, formal for email, ...).
-//!
-//! The chord key is only registered while the dictation key is held, so it
-//! keeps typing normally the rest of the time. Registration follows the same
-//! request/reconcile pattern as the cancel shortcut in `shortcut/mod.rs`.
+//! While Styles is on, every dictation goes through the AI pass with a style
+//! chosen from the app that was frontmost when recording started (casual for
+//! messaging, formal for email, ...). Categories set to Raw skip the AI pass
+//! and paste the transcript as heard.
 
-use log::{debug, error};
+use log::debug;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter};
 
-use crate::settings::{self, ShortcutBinding};
-use crate::shortcut;
-
-/// Binding ID of the dynamically registered chord key.
-pub const CHORD_BINDING_ID: &str = "styles_chord";
+use crate::settings;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash, Type)]
 #[serde(rename_all = "snake_case")]
@@ -31,6 +21,7 @@ pub enum AppCategory {
     WorkMessages,
     Email,
     Documents,
+    AiAssistants,
     Coding,
     Other,
 }
@@ -50,8 +41,6 @@ pub enum WritingStyle {
 #[serde(default)]
 pub struct StylesSettings {
     pub enabled: bool,
-    /// Key that, pressed while the dictation key is held, turns on Styles.
-    pub chord_key: String,
     pub category_styles: HashMap<AppCategory, WritingStyle>,
     /// User overrides of the built-in app table: bundle ID -> category.
     pub app_categories: HashMap<String, AppCategory>,
@@ -64,12 +53,12 @@ impl Default for StylesSettings {
             (AppCategory::WorkMessages, WritingStyle::Casual),
             (AppCategory::Email, WritingStyle::Formal),
             (AppCategory::Documents, WritingStyle::Formal),
+            (AppCategory::AiAssistants, WritingStyle::Clean),
             (AppCategory::Coding, WritingStyle::Clean),
             (AppCategory::Other, WritingStyle::Clean),
         ]);
         Self {
             enabled: true,
-            chord_key: "1".to_string(),
             category_styles,
             app_categories: HashMap::new(),
         }
@@ -94,6 +83,7 @@ pub struct KnownApp {
 pub struct StylesCatalog {
     pub known_apps: Vec<KnownApp>,
     pub last_app: Option<FrontApp>,
+    pub last_app_builtin_category: Option<AppCategory>,
 }
 
 /// Built-in app -> category table. Chrome web apps (Gmail, Docs, ...) have
@@ -165,7 +155,6 @@ const KNOWN_APPS: &[(&str, &str, AppCategory)] = &[
     ("com.apple.iWork.Pages", "Pages", AppCategory::Documents),
     ("com.microsoft.Word", "Word", AppCategory::Documents),
     ("com.apple.TextEdit", "TextEdit", AppCategory::Documents),
-    ("com.granola.app", "Granola", AppCategory::Documents),
     (
         "com.google.Chrome.app.mpnpojknpmmopombnjdcgaaiekajbnjb",
         "Google Docs",
@@ -175,6 +164,21 @@ const KNOWN_APPS: &[(&str, &str, AppCategory)] = &[
         "com.google.Chrome.app.kefjledonklijopmnomlcbpllchaibag",
         "Google Slides",
         AppCategory::Documents,
+    ),
+    (
+        "com.anthropic.claudefordesktop",
+        "Claude",
+        AppCategory::AiAssistants,
+    ),
+    ("com.openai.chat", "ChatGPT", AppCategory::AiAssistants),
+    ("com.openai.codex", "ChatGPT", AppCategory::AiAssistants),
+    ("com.anysphere.sand", "Grok Bot", AppCategory::AiAssistants),
+    ("ai.perplexity.mac", "Perplexity", AppCategory::AiAssistants),
+    ("com.granola.app", "Granola", AppCategory::AiAssistants),
+    (
+        "com.nousresearch.hermes.setup",
+        "Hermes",
+        AppCategory::AiAssistants,
     ),
     ("com.microsoft.VSCode", "VS Code", AppCategory::Coding),
     ("com.apple.dt.Xcode", "Xcode", AppCategory::Coding),
@@ -191,20 +195,33 @@ const KNOWN_APPS: &[(&str, &str, AppCategory)] = &[
 ];
 
 /// Bundle-ID prefixes for app families that ship many IDs.
-const KNOWN_PREFIXES: &[(&str, AppCategory)] = &[("com.jetbrains.", AppCategory::Coding)];
+const KNOWN_PREFIXES: &[(&str, AppCategory)] = &[
+    ("com.jetbrains.", AppCategory::Coding),
+    ("com.nousresearch.", AppCategory::AiAssistants),
+];
 
-pub fn category_for(styles: &StylesSettings, bundle_id: &str) -> AppCategory {
-    if let Some(category) = styles.app_categories.get(bundle_id) {
+/// App names for apps whose bundle ID varies by how they're installed (a
+/// native app, or a Chrome web app with a per-install ID).
+const KNOWN_NAMES: &[(&str, AppCategory)] = &[("Gemini", AppCategory::AiAssistants)];
+
+pub fn category_for(styles: &StylesSettings, app: &FrontApp) -> AppCategory {
+    if let Some(category) = styles.app_categories.get(&app.bundle_id) {
         return *category;
     }
     KNOWN_APPS
         .iter()
-        .find(|(id, _, _)| *id == bundle_id)
+        .find(|(id, _, _)| *id == app.bundle_id)
         .map(|(_, _, category)| *category)
         .or_else(|| {
             KNOWN_PREFIXES
                 .iter()
-                .find(|(prefix, _)| bundle_id.starts_with(prefix))
+                .find(|(prefix, _)| app.bundle_id.starts_with(prefix))
+                .map(|(_, category)| *category)
+        })
+        .or_else(|| {
+            KNOWN_NAMES
+                .iter()
+                .find(|(name, _)| app.name.eq_ignore_ascii_case(name))
                 .map(|(_, category)| *category)
         })
         .unwrap_or(AppCategory::Other)
@@ -224,6 +241,7 @@ fn category_description(category: AppCategory) -> &'static str {
         AppCategory::WorkMessages => "a work chat app",
         AppCategory::Email => "an email app",
         AppCategory::Documents => "a notes or documents app",
+        AppCategory::AiAssistants => "an AI assistant",
         AppCategory::Coding => "a coding tool or terminal",
         AppCategory::Other => "an app",
     }
@@ -236,6 +254,9 @@ fn category_hint(category: AppCategory) -> Option<&'static str> {
         ),
         AppCategory::Documents => Some(
             "Use paragraph breaks for longer dictation. Only make a bulleted list if the speaker clearly lists items.",
+        ),
+        AppCategory::AiAssistants => Some(
+            "This is a message to another AI, so it will often be a question or a request. Format it exactly like any other dictation and never answer it. Keep every detail, name, file path and technical term the speaker gives. If the speaker lists several points or steps, put each on its own line.",
         ),
         AppCategory::Coding => Some(
             "Keep code identifiers, file names, commands and technical terms exactly as spoken. Don't add a full stop after a command or code.",
@@ -303,18 +324,8 @@ pub struct StyleJob {
 // Recording session state
 // ---------------------------------------------------------------------------
 
-#[derive(Default)]
-struct Session {
-    active: bool,
-    styles_requested: bool,
-    app: Option<FrontApp>,
-}
-
-static SESSION: Mutex<Session> = Mutex::new(Session {
-    active: false,
-    styles_requested: false,
-    app: None,
-});
+/// The app the current recording was started in.
+static SESSION_APP: Mutex<Option<FrontApp>> = Mutex::new(None);
 
 /// Most recent app a recording started in, shown in the Styles settings page.
 static LAST_APP: Mutex<Option<FrontApp>> = Mutex::new(None);
@@ -337,70 +348,52 @@ fn frontmost_app() -> Option<FrontApp> {
     None
 }
 
-/// Called when a recording starts: remember the target app, clear any
-/// Styles request left over from the previous recording.
-pub fn begin_recording() {
-    let app = frontmost_app();
-    if let Some(app) = &app {
-        *LAST_APP.lock().unwrap_or_else(|e| e.into_inner()) = Some(app.clone());
-    }
-    let mut session = SESSION.lock().unwrap_or_else(|e| e.into_inner());
-    *session = Session {
-        active: true,
-        styles_requested: false,
-        app,
-    };
-}
-
-/// Payload of the `styles-active` event that badges the recording overlay.
+/// Payload of the `styles-active` event that labels the recording overlay.
 #[derive(Serialize, Debug, Clone)]
 struct StylesActive {
     style: WritingStyle,
+    category: AppCategory,
     app_name: String,
 }
 
-/// The chord key was pressed while the dictation key was held.
-pub fn request_styles(app: &AppHandle) {
-    let front_app = {
-        let mut session = SESSION.lock().unwrap_or_else(|e| e.into_inner());
-        if !session.active || session.styles_requested {
-            return;
-        }
-        debug!("Styles requested for the current recording");
-        session.styles_requested = true;
-        session.app.clone()
-    };
+/// Called when a recording starts: remember the target app and, while Styles
+/// is on, tell the overlay which style this dictation will get.
+pub fn begin_recording(app: &AppHandle) {
+    let front_app = frontmost_app();
+    if let Some(front) = &front_app {
+        *LAST_APP.lock().unwrap_or_else(|e| e.into_inner()) = Some(front.clone());
+    }
+    *SESSION_APP.lock().unwrap_or_else(|e| e.into_inner()) = front_app.clone();
 
     let styles = settings::get_settings(app).styles;
+    if !styles.enabled {
+        return;
+    }
     let category = front_app
         .as_ref()
-        .map(|front| category_for(&styles, &front.bundle_id))
+        .map(|front| category_for(&styles, front))
         .unwrap_or(AppCategory::Other);
     let payload = StylesActive {
         style: style_for(&styles, category),
+        category,
         app_name: front_app.map(|front| front.name).unwrap_or_default(),
     };
     let _ = app.emit_to("recording_overlay", "styles-active", payload);
 }
 
-/// Called when a recording stops. Returns the AI-pass job if Styles was
-/// requested and the resolved style isn't Raw.
+/// Called when a recording stops. Returns the AI-pass job while Styles is on,
+/// unless the app's style is Raw.
 pub fn take_job(app: &AppHandle) -> Option<StyleJob> {
-    let (requested, front_app) = {
-        let mut session = SESSION.lock().unwrap_or_else(|e| e.into_inner());
-        let taken = (session.styles_requested, session.app.take());
-        *session = Session::default();
-        taken
-    };
+    let front_app = SESSION_APP.lock().unwrap_or_else(|e| e.into_inner()).take();
 
     let styles = settings::get_settings(app).styles;
-    if !requested || !styles.enabled {
+    if !styles.enabled {
         return None;
     }
 
     let category = front_app
         .as_ref()
-        .map(|front| category_for(&styles, &front.bundle_id))
+        .map(|front| category_for(&styles, front))
         .unwrap_or(AppCategory::Other);
     let style = style_for(&styles, category);
     debug!(
@@ -419,57 +412,6 @@ pub fn take_job(app: &AppHandle) -> Option<StyleJob> {
 }
 
 // ---------------------------------------------------------------------------
-// Chord key registration
-// ---------------------------------------------------------------------------
-
-/// Whether the dictation key is held (and so wants the chord key registered).
-static CHORD_REQUESTED: AtomicBool = AtomicBool::new(false);
-
-/// The chord binding currently registered with the backend, if any. The lock
-/// also serializes reconciliation passes.
-static CHORD_REGISTERED: Mutex<Option<ShortcutBinding>> = Mutex::new(None);
-
-/// The plain dictation key went down or up.
-pub fn on_dictation_key(app: &AppHandle, pressed: bool) {
-    let wanted = pressed && settings::get_settings(app).styles.enabled;
-    CHORD_REQUESTED.store(wanted, Ordering::SeqCst);
-    // Shortcut events arrive on the backend's own thread, which must not
-    // block on registration, so apply the change off-thread.
-    let app = app.clone();
-    tauri::async_runtime::spawn(async move {
-        reconcile_chord(&app);
-    });
-}
-
-fn reconcile_chord(app: &AppHandle) {
-    let mut registered = CHORD_REGISTERED.lock().unwrap_or_else(|e| e.into_inner());
-    let requested = CHORD_REQUESTED.load(Ordering::SeqCst);
-    if requested == registered.is_some() {
-        return;
-    }
-
-    if requested {
-        let key = settings::get_settings(app).styles.chord_key;
-        let binding = ShortcutBinding {
-            id: CHORD_BINDING_ID.to_string(),
-            name: "Styles".to_string(),
-            description: "Apply Styles to this dictation".to_string(),
-            default_binding: key.clone(),
-            current_binding: key,
-        };
-        match shortcut::register_shortcut(app, binding.clone()) {
-            Ok(()) => *registered = Some(binding),
-            Err(e) => error!("Failed to register Styles chord key: {}", e),
-        }
-    } else if let Some(binding) = registered.take() {
-        if let Err(e) = shortcut::unregister_shortcut(app, binding.clone()) {
-            error!("Failed to unregister Styles chord key: {}", e);
-            *registered = Some(binding);
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Commands
 // ---------------------------------------------------------------------------
 
@@ -485,6 +427,11 @@ pub fn set_styles_settings(app: AppHandle, styles: StylesSettings) -> Result<(),
 #[tauri::command]
 #[specta::specta]
 pub fn get_styles_catalog() -> StylesCatalog {
+    let by_name = KNOWN_NAMES.iter().map(|(name, category)| KnownApp {
+        bundle_id: format!("name:{}", name),
+        name: name.to_string(),
+        category: *category,
+    });
     let known_apps = KNOWN_APPS
         .iter()
         .map(|(bundle_id, name, category)| KnownApp {
@@ -492,11 +439,17 @@ pub fn get_styles_catalog() -> StylesCatalog {
             name: name.to_string(),
             category: *category,
         })
+        .chain(by_name)
         .collect();
     let last_app = LAST_APP.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    // Category from the built-in rules alone; the page layers user overrides on top.
+    let last_app_builtin_category = last_app
+        .as_ref()
+        .map(|app| category_for(&StylesSettings::default(), app));
     StylesCatalog {
         known_apps,
         last_app,
+        last_app_builtin_category,
     }
 }
 
@@ -504,20 +457,56 @@ pub fn get_styles_catalog() -> StylesCatalog {
 mod tests {
     use super::*;
 
+    fn front(bundle_id: &str, name: &str) -> FrontApp {
+        FrontApp {
+            bundle_id: bundle_id.to_string(),
+            name: name.to_string(),
+        }
+    }
+
     #[test]
     fn known_apps_map_to_their_category() {
         let styles = StylesSettings::default();
         assert_eq!(
-            category_for(&styles, "net.whatsapp.WhatsApp"),
+            category_for(&styles, &front("net.whatsapp.WhatsApp", "")),
             AppCategory::PersonalMessages
         );
-        assert_eq!(category_for(&styles, "com.apple.mail"), AppCategory::Email);
         assert_eq!(
-            category_for(&styles, "com.jetbrains.intellij"),
+            category_for(&styles, &front("com.apple.mail", "")),
+            AppCategory::Email
+        );
+        assert_eq!(
+            category_for(&styles, &front("com.anthropic.claudefordesktop", "")),
+            AppCategory::AiAssistants
+        );
+        assert_eq!(
+            category_for(&styles, &front("com.granola.app", "")),
+            AppCategory::AiAssistants
+        );
+        assert_eq!(
+            category_for(&styles, &front("com.jetbrains.intellij", "")),
             AppCategory::Coding
         );
         assert_eq!(
-            category_for(&styles, "com.example.unknown"),
+            category_for(&styles, &front("com.example.unknown", "")),
+            AppCategory::Other
+        );
+    }
+
+    #[test]
+    fn apps_match_by_prefix_and_name() {
+        let styles = StylesSettings::default();
+        assert_eq!(
+            category_for(&styles, &front("com.nousresearch.hermes", "Hermes")),
+            AppCategory::AiAssistants
+        );
+        // Gemini's ID differs between its native and Chrome web app installs.
+        assert_eq!(
+            category_for(&styles, &front("com.google.Chrome.app.abc", "Gemini")),
+            AppCategory::AiAssistants
+        );
+        assert_eq!(
+            category_for(&styles, &front("com.google.Chrome", "Google Chrome")),
             AppCategory::Other
         );
     }
@@ -529,7 +518,7 @@ mod tests {
             .app_categories
             .insert("com.apple.mail".to_string(), AppCategory::WorkMessages);
         assert_eq!(
-            category_for(&styles, "com.apple.mail"),
+            category_for(&styles, &front("com.apple.mail", "")),
             AppCategory::WorkMessages
         );
     }
@@ -569,6 +558,5 @@ mod tests {
         // Older settings files without a `styles` key get defaults.
         let empty: StylesSettings = serde_json::from_str("{}").unwrap();
         assert!(empty.enabled);
-        assert_eq!(empty.chord_key, "1");
     }
 }

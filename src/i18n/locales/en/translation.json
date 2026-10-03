@@ -651,7 +651,7 @@
       "title": "Styles",
       "enabled": {
         "label": "Format for the app you're in",
-        "description": "Hold {{dictationKey}} and press {{chordKey}} to dictate with Styles: the text is tidied by AI and formatted to suit the app, such as casual for messages and formal for email. {{dictationKey}} on its own still pastes exactly what you said."
+        "description": "Every dictation with {{dictationKey}} is tidied by AI and formatted to suit the app you're in, such as casual for messages and formal for email. Set a kind of app to Raw to paste exactly what you said there."
       },
       "categories": {
         "title": "Style for each kind of app",
@@ -663,6 +663,7 @@
         "work_messages": "Work chat",
         "email": "Email",
         "documents": "Notes & documents",
+        "ai_assistants": "AI assistants",
         "coding": "Coding",
         "other": "Everything else"
       },
@@ -762,9 +763,9 @@
     }
   },
   "overlay": {
-    "transcribing": "Transcribing...",
-    "processing": "Processing...",
-    "styling": "{{style}} · {{app}}"
+    "transcribing": "Transcribing",
+    "processing": "Processing",
+    "formatting": "Formatting"
   },
   "secureInput": {
     "blockedWithCulprit_one": "{{name}} may be blocking 1 shortcut",
