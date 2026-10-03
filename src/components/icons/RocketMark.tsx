@@ -1,5 +1,5 @@
-// Outline rocket used as a nav icon; same geometry as the tray icon
-// (branding/generate.py), stroked in currentColor like the lucide icons.
+// Rocket's ascent mark as a nav icon, drawn in currentColor like the lucide
+// icons beside it (geometry from branding/generate.py).
 const RocketMark = ({
   width,
   height,
@@ -12,22 +12,18 @@ const RocketMark = ({
   <svg
     width={width || 24}
     height={height || 24}
-    viewBox="0 0 64 64"
+    viewBox="0 0 16 16"
     className={className}
     xmlns="http://www.w3.org/2000/svg"
   >
-    <g
-      transform="translate(31 34) rotate(45) scale(0.6) translate(-50 -52)"
+    <path
+      d="M3 15.2C3 9.6 6.3 5.2 11.4 4.3"
       fill="none"
       stroke="currentColor"
-      strokeWidth="7.5"
-      strokeLinejoin="round"
+      strokeWidth="1.4"
       strokeLinecap="round"
-    >
-      <path d="M50 6 C61 14 67 28 66.5 46 C75 50 80 58 79 72 L66 64 L34 64 L21 72 C20 58 25 50 33.5 46 C33 28 39 14 50 6 Z" />
-      <path d="M43 64 C43 75 47 81 50 87 C53 81 57 75 57 64" />
-      <circle cx="50" cy="34" r="7" />
-    </g>
+    />
+    <circle cx="12.6" cy="4.1" r="2" fill="currentColor" />
   </svg>
 );
 
