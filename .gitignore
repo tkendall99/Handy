@@ -45,3 +45,6 @@ result
 
 # Python bytecode (scripts/)
 __pycache__/
+
+# Intermediate output of branding/generate.py
+branding/out/

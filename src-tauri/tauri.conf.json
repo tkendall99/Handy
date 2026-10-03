@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Handy",
+  "productName": "Rocket",
   "version": "0.9.8",
-  "identifier": "com.pais.handy",
+  "identifier": "com.tkendall.rocket",
   "build": {
     "beforeDevCommand": "bun run dev",
     "devUrl": "http://localhost:1420",
@@ -25,7 +25,7 @@
   },
   "bundle": {
     "active": true,
-    "createUpdaterArtifacts": true,
+    "createUpdaterArtifacts": false,
     "targets": "all",
     "resources": ["resources/**/*"],
     "license": "MIT",
@@ -40,7 +40,7 @@
       "files": {},
       "hardenedRuntime": true,
       "minimumSystemVersion": "10.15",
-      "signingIdentity": "-",
+      "signingIdentity": "Apple Development",
       "entitlements": "Entitlements.plist"
     },
     "linux": {
@@ -81,7 +81,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEJBQjcyMDk1MjA2NjAxRjkKUldUNUFXWWdsU0MzdXRRZi8zYzhqV2FaNUVDbDd2Rk5VM1IvWWowVXdmRFNKQ1BrMXF5RFFsLy8K",
       "endpoints": [
-        "https://github.com/cjpais/Handy/releases/latest/download/latest.json"
+        "https://github.com/tkendall99/Handy/releases/latest/download/latest.json"
       ]
     }
   }
