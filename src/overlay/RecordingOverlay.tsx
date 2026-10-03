@@ -8,11 +8,15 @@ import type {
   StreamPhaseEvent,
   StreamTextEvent,
   StreamWorkKind,
+  WritingStyle,
 } from "@/bindings";
 import i18n, { syncLanguageFromSettings } from "@/i18n";
 import { getLanguageDirection } from "@/lib/utils/rtl";
 
 type OverlayState = "recording" | "streaming" | "transcribing" | "processing";
+
+// Rocket Styles: sent when the chord key marks this recording for Styles.
+type StylesActive = { style: WritingStyle; app_name: string };
 
 // Number of reactive bars in the waveform (the simple, smoothed style shared by
 // every overlay form). Mic levels arrive as 16 FFT buckets; we take the first N.
@@ -32,6 +36,7 @@ const RecordingOverlay: React.FC = () => {
     tentative: "",
   });
   const [phase, setPhase] = useState<StreamPhase>("listening");
+  const [stylesActive, setStylesActive] = useState<StylesActive | null>(null);
   const [workKind, setWorkKind] = useState<StreamWorkKind>("transcribing");
   const [elapsed, setElapsed] = useState(0);
   // Bumped on each new streaming session so the Live card remounts fresh (replays
@@ -64,6 +69,7 @@ const RecordingOverlay: React.FC = () => {
           smoothedLevelsRef.current = Array(16).fill(0);
           setLevels(Array(WAVE_BARS).fill(0));
           setStreamText({ committed: "", tentative: "" });
+          setStylesActive(null);
         }
 
         await syncLanguageFromSettings();
@@ -111,6 +117,11 @@ const RecordingOverlay: React.FC = () => {
         setLevels(smoothed.slice(0, WAVE_BARS));
       });
 
+      const unlistenStyles = await listen<StylesActive>(
+        "styles-active",
+        (event) => setStylesActive(event.payload),
+      );
+
       const unlistenStream = await events.streamTextEvent.listen((event) => {
         setStreamText(event.payload);
       });
@@ -126,6 +137,7 @@ const RecordingOverlay: React.FC = () => {
         unlistenHide();
         unlistenReady();
         unlistenLevel();
+        unlistenStyles();
         unlistenStream();
         unlistenPhase();
       };
@@ -169,6 +181,19 @@ const RecordingOverlay: React.FC = () => {
   const fmtTime = (s: number) =>
     `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 
+  const styleLabel = stylesActive
+    ? t(`settings.styles.style.${stylesActive.style}.label`)
+    : "";
+  // While the AI pass runs, name the style and the app it was picked for.
+  const stylingLabel = stylesActive
+    ? stylesActive.app_name
+      ? t("overlay.styling", {
+          style: styleLabel,
+          app: stylesActive.app_name,
+        })
+      : styleLabel
+    : null;
+
   // ---- Shared building blocks (one visual language for every overlay form) ----
   const waveform = (
     <div className={`swave ${captureReady ? "ready" : "arming"}`}>
@@ -205,7 +230,19 @@ const RecordingOverlay: React.FC = () => {
   const listeningRow = (showTimer: boolean, showCancel: boolean) => (
     <div className="sbase">
       <div className="sbase-l">
-        <span className={`sdot ${captureReady ? "ready" : "arming"}`} />
+        {stylesActive ? (
+          <span className={`sstyle ${captureReady ? "ready" : "arming"}`}>
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path
+                d="M8 1.5 9.4 6.6 14.5 8 9.4 9.4 8 14.5 6.6 9.4 1.5 8 6.6 6.6Z"
+                fill="currentColor"
+              />
+            </svg>
+            {styleLabel}
+          </span>
+        ) : (
+          <span className={`sdot ${captureReady ? "ready" : "arming"}`} />
+        )}
       </div>
       {waveform}
       <div className="sbase-r">
@@ -244,8 +281,8 @@ const RecordingOverlay: React.FC = () => {
         <div
           key={session}
           className={`scard ${open ? "open" : ""} ${collapsed ? "working" : ""} ${
-            isVisible ? "" : "leaving"
-          }`}
+            stylesActive ? "styled" : ""
+          } ${isVisible ? "" : "leaving"}`}
         >
           <div className="stext">
             <div className="stext-clip">
@@ -269,7 +306,7 @@ const RecordingOverlay: React.FC = () => {
           {working
             ? workingRow(
                 workKind === "polishing"
-                  ? t("overlay.processing")
+                  ? (stylingLabel ?? t("overlay.processing"))
                   : t("overlay.transcribing"),
                 true,
               )
@@ -285,7 +322,7 @@ const RecordingOverlay: React.FC = () => {
   const working = state === "transcribing" || state === "processing";
   const workLabel =
     state === "processing"
-      ? t("overlay.processing")
+      ? (stylingLabel ?? t("overlay.processing"))
       : t("overlay.transcribing");
 
   return (
@@ -294,7 +331,9 @@ const RecordingOverlay: React.FC = () => {
       className={`ov-stage ${position} ov-fade ${isVisible ? "show" : ""}`}
     >
       <div
-        className={`scard compact ${working && isVisible ? "cworking" : ""}`}
+        className={`scard compact ${working && isVisible ? "cworking" : ""} ${
+          stylesActive ? "styled" : ""
+        }`}
       >
         {working ? workingRow(workLabel, true) : listeningRow(false, true)}
       </div>

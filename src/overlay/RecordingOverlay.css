@@ -53,7 +53,9 @@
   --ov-rest-w: 172px; /* resting compact pill (minimal, recording) -- roomy enough
                          for the English working label before the grow starts */
   --ov-pill-w: 184px; /* base width / Live pill before it opens or collapses */
-  --ov-work-w: 216px; /* working pill (transcribing / polishing) -- wide enough to
+  --ov-work-w: 216px;
+  --ov-styled-w: 236px; /* Rocket Styles: room for the style badge; must stay
+                           within the compact window width in overlay.rs */ /* working pill (transcribing / polishing) -- wide enough to
                          center longer labels; shared by Live (collapsed) + minimal */
   --ov-open-w: 392px; /* Live panel, expanded */
   --ov-base-h: 40px; /* control-row height (.sbase) */
@@ -465,4 +467,49 @@
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* ---- Rocket Styles: accent outline + style badge for a Styles dictation ---- */
+.scard.styled {
+  border-color: var(--s-accent);
+}
+.scard.compact.styled,
+.scard.styled:not(.open) {
+  width: var(--ov-styled-w);
+}
+/* The badge is wider than the dot it replaces, so let the side columns size to
+   their content and keep the waveform centered in what's left. */
+.scard.styled .sbase {
+  grid-template-columns: auto 1fr auto;
+}
+.scard.styled .swave,
+.scard.styled .swork-label {
+  justify-self: center;
+}
+/* Long app names ("Formal · Microsoft PowerPoint") truncate instead of
+   running into the cancel button. */
+.scard.styled .swork-label {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sstyle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--s-accent);
+  transition: color 180ms ease;
+}
+.sstyle.arming {
+  color: var(--s-muted);
+}
+.sstyle svg {
+  width: 11px;
+  height: 11px;
+  flex: none;
 }

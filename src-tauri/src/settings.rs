@@ -468,6 +468,9 @@ pub struct AppSettings {
     pub post_process_prompts: Vec<LLMPrompt>,
     #[serde(default)]
     pub post_process_selected_prompt_id: Option<String>,
+    /// Rocket: per-app writing styles (see `styles.rs`).
+    #[serde(default)]
+    pub styles: crate::styles::StylesSettings,
     #[serde(default)]
     pub mute_while_recording: bool,
     #[serde(default)]
@@ -969,6 +972,7 @@ pub fn get_default_settings() -> AppSettings {
         post_process_models: default_post_process_models(),
         post_process_prompts: default_post_process_prompts(),
         post_process_selected_prompt_id: None,
+        styles: crate::styles::StylesSettings::default(),
         mute_while_recording: false,
         append_trailing_space: false,
         app_language: default_app_language(),

@@ -116,8 +116,28 @@ struct ChatCompletionRequest {
     stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     response_format: Option<ResponseFormat>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f32>,
     #[serde(flatten)]
     reasoning: ReasoningParams,
+}
+
+/// Output cap for a cleanup request: roughly the input's length in tokens
+/// (~4 chars each) plus headroom. Without a cap some providers reserve their
+/// model maximum against a per-minute token budget (Groq's free tier), which
+/// rejects back-to-back dictations as "request too large".
+fn output_token_cap(user_content: &str) -> u32 {
+    let input_tokens = (user_content.chars().count() / 4) as u32;
+    (input_tokens * 2 + 512).min(8192)
+}
+
+/// Cleanup should be repeatable: at its default temperature Groq's Qwen
+/// occasionally reworded dates or dropped dictated punctuation. Only set for
+/// providers known to accept it; some reasoning models reject a temperature.
+fn cleanup_temperature(provider: &PostProcessProvider) -> Option<f32> {
+    (provider.id == "groq").then_some(0.0)
 }
 
 #[derive(Debug, Deserialize)]
@@ -357,6 +377,7 @@ pub async fn send_chat_completion_with_schema(
     }
 
     // Add user message
+    let max_tokens = output_token_cap(&user_content);
     messages.push(ChatMessage {
         role: "user".to_string(),
         content: user_content,
@@ -384,6 +405,8 @@ pub async fn send_chat_completion_with_schema(
         messages,
         stream: false,
         response_format,
+        max_tokens: Some(max_tokens),
+        temperature: cleanup_temperature(provider),
         reasoning,
     };
 
@@ -564,6 +587,13 @@ mod tests {
         }
     }
 
+    #[test]
+    fn output_cap_scales_with_input_and_is_bounded() {
+        assert_eq!(output_token_cap(""), 512);
+        assert_eq!(output_token_cap(&"a".repeat(400)), 712);
+        assert_eq!(output_token_cap(&"a".repeat(100_000)), 8192);
+    }
+
     fn request_json(reasoning: ReasoningParams) -> Value {
         let request = ChatCompletionRequest {
             model: "test-model".to_string(),
@@ -573,6 +603,8 @@ mod tests {
             }],
             stream: false,
             response_format: None,
+            max_tokens: None,
+            temperature: None,
             reasoning,
         };
         serde_json::to_value(&request).unwrap()

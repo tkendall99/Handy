@@ -11,6 +11,7 @@
   },
   "sidebar": {
     "general": "General",
+    "styles": "Styles",
     "models": "Models",
     "advanced": "Advanced",
     "postProcessing": "Post Process",
@@ -645,6 +646,57 @@
           "details": "Rocket's local speech-to-text is built on transcribe.cpp and ggml. Thanks to the amazing work by Georgi Gerganov and contributors."
         }
       }
+    },
+    "styles": {
+      "title": "Styles",
+      "enabled": {
+        "label": "Format for the app you're in",
+        "description": "Hold {{dictationKey}} and press {{chordKey}} to dictate with Styles: the text is tidied by AI and formatted to suit the app, such as casual for messages and formal for email. {{dictationKey}} on its own still pastes exactly what you said."
+      },
+      "categories": {
+        "title": "Style for each kind of app",
+        "description": "Rocket checks which app is in front when you start dictating.",
+        "otherApps": "Any app not listed above"
+      },
+      "category": {
+        "personal_messages": "Personal messages",
+        "work_messages": "Work chat",
+        "email": "Email",
+        "documents": "Notes & documents",
+        "coding": "Coding",
+        "other": "Everything else"
+      },
+      "style": {
+        "formal": {
+          "label": "Formal",
+          "description": "Full sentences, full punctuation"
+        },
+        "clean": {
+          "label": "Clean",
+          "description": "Tidied up, wording as spoken"
+        },
+        "casual": {
+          "label": "Casual",
+          "description": "Light punctuation, no final full stop"
+        },
+        "very_casual": {
+          "label": "Very casual",
+          "description": "all lowercase, minimal punctuation"
+        },
+        "raw": {
+          "label": "Raw",
+          "description": "No AI, exactly what you said"
+        }
+      },
+      "lastApp": {
+        "title": "Last app you dictated into",
+        "description": "Change which kind of app this counts as.",
+        "reset": "Reset"
+      },
+      "model": {
+        "title": "AI model",
+        "description": "Styles sends your dictation to this model. Pick a fast one, as every Styles dictation waits for it."
+      }
     }
   },
   "footer": {
@@ -711,7 +763,8 @@
   },
   "overlay": {
     "transcribing": "Transcribing...",
-    "processing": "Processing..."
+    "processing": "Processing...",
+    "styling": "{{style}} · {{app}}"
   },
   "secureInput": {
     "blockedWithCulprit_one": "{{name}} may be blocking 1 shortcut",

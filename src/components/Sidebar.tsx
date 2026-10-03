@@ -1,6 +1,14 @@
 import React from "react";
 import { useTranslation } from "react-i18next";
-import { Cog, FlaskConical, History, Info, Sparkles, Cpu } from "lucide-react";
+import {
+  Cog,
+  FlaskConical,
+  History,
+  Info,
+  Sparkles,
+  Cpu,
+  Wand2,
+} from "lucide-react";
 import RocketTextLogo from "./icons/RocketTextLogo";
 import RocketMark from "./icons/RocketMark";
 import { useSettings } from "../hooks/useSettings";
@@ -12,6 +20,7 @@ import {
   AboutSettings,
   PostProcessingSettings,
   ModelsSettings,
+  StylesSettings,
 } from "./settings";
 
 export type SidebarSection = keyof typeof SECTIONS_CONFIG;
@@ -36,6 +45,12 @@ export const SECTIONS_CONFIG = {
     labelKey: "sidebar.general",
     icon: RocketMark,
     component: GeneralSettings,
+    enabled: () => true,
+  },
+  styles: {
+    labelKey: "sidebar.styles",
+    icon: Wand2,
+    component: StylesSettings,
     enabled: () => true,
   },
   history: {

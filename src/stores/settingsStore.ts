@@ -8,6 +8,7 @@ import type {
   TranscribeAcceleratorSetting,
   OrtAcceleratorSetting,
   ShortcutActivation,
+  StylesSettings,
   VadBackend,
 } from "@/bindings";
 import { commands } from "@/bindings";
@@ -159,6 +160,7 @@ const settingUpdaters: {
     commands.changePostProcessEnabledSetting(value as boolean),
   post_process_selected_prompt_id: (value) =>
     commands.setPostProcessSelectedPrompt(value as string),
+  styles: (value) => commands.setStylesSettings(value as StylesSettings),
   mute_while_recording: (value) =>
     commands.changeMuteWhileRecordingSetting(value as boolean),
   append_trailing_space: (value) =>

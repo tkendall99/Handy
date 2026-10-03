@@ -119,33 +119,6 @@ fn should_use_streaming_overlay(style: OverlayStyle, is_streaming: bool) -> bool
 }
 
 async fn post_process_transcription(settings: &AppSettings, transcription: &str) -> Option<String> {
-    if is_blank_transcription(transcription) {
-        debug!("Post-processing skipped because the transcription is empty");
-        return None;
-    }
-
-    let provider = match settings.active_post_process_provider().cloned() {
-        Some(provider) => provider,
-        None => {
-            debug!("Post-processing enabled but no provider is selected");
-            return None;
-        }
-    };
-
-    let model = settings
-        .post_process_models
-        .get(&provider.id)
-        .cloned()
-        .unwrap_or_default();
-
-    if model.trim().is_empty() {
-        debug!(
-            "Post-processing skipped because provider '{}' has no model configured",
-            provider.id
-        );
-        return None;
-    }
-
     let selected_prompt_id = match &settings.post_process_selected_prompt_id {
         Some(id) => id.clone(),
         None => {
@@ -174,6 +147,39 @@ async fn post_process_transcription(settings: &AppSettings, transcription: &str)
         return None;
     }
 
+    run_llm_pass(settings, &prompt, transcription).await
+}
+
+/// Send a transcription through the configured LLM provider. `prompt` is
+/// either a legacy template containing `${output}` or a plain system prompt.
+async fn run_llm_pass(settings: &AppSettings, prompt: &str, transcription: &str) -> Option<String> {
+    if is_blank_transcription(transcription) {
+        debug!("Post-processing skipped because the transcription is empty");
+        return None;
+    }
+
+    let provider = match settings.active_post_process_provider().cloned() {
+        Some(provider) => provider,
+        None => {
+            debug!("Post-processing enabled but no provider is selected");
+            return None;
+        }
+    };
+
+    let model = settings
+        .post_process_models
+        .get(&provider.id)
+        .cloned()
+        .unwrap_or_default();
+
+    if model.trim().is_empty() {
+        debug!(
+            "Post-processing skipped because provider '{}' has no model configured",
+            provider.id
+        );
+        return None;
+    }
+
     debug!(
         "Starting LLM post-processing with provider '{}' (model: {})",
         provider.id, model
@@ -188,12 +194,12 @@ async fn post_process_transcription(settings: &AppSettings, transcription: &str)
     // Ask these providers to skip reasoning/thinking — post-processing rarely
     // benefits from it and it adds seconds of latency. llm_client picks the
     // field the endpoint understands and retries without it if rejected.
-    let disable_reasoning = matches!(provider.id.as_str(), "custom" | "openrouter");
+    let disable_reasoning = matches!(provider.id.as_str(), "custom" | "openrouter" | "groq");
 
     if provider.supports_structured_output {
         debug!("Using structured outputs for provider '{}'", provider.id);
 
-        let system_prompt = build_system_prompt(&prompt);
+        let system_prompt = build_system_prompt(prompt);
         let user_content = transcription.to_string();
 
         // Handle Apple Intelligence separately since it uses native Swift APIs
@@ -307,19 +313,34 @@ async fn post_process_transcription(settings: &AppSettings, transcription: &str)
         }
     }
 
-    // Legacy mode: Replace ${output} variable in the prompt with the actual text
-    let processed_prompt = prompt.replace("${output}", transcription);
-    debug!("Processed prompt length: {} chars", processed_prompt.len());
+    // Legacy mode: a template with ${output} is sent as one user message;
+    // a plain system prompt (e.g. Styles) goes as the system message with the
+    // transcription as the user message.
+    let response = if prompt.contains("${output}") {
+        let processed_prompt = prompt.replace("${output}", transcription);
+        debug!("Processed prompt length: {} chars", processed_prompt.len());
+        crate::llm_client::send_chat_completion(
+            &provider,
+            api_key,
+            &model,
+            processed_prompt,
+            disable_reasoning,
+        )
+        .await
+    } else {
+        crate::llm_client::send_chat_completion_with_schema(
+            &provider,
+            api_key,
+            &model,
+            transcription.to_string(),
+            Some(prompt.to_string()),
+            None,
+            disable_reasoning,
+        )
+        .await
+    };
 
-    match crate::llm_client::send_chat_completion(
-        &provider,
-        api_key,
-        &model,
-        processed_prompt,
-        disable_reasoning,
-    )
-    .await
-    {
+    match response {
         Ok(Some(content)) => {
             let content = strip_invisible_chars(strip_think_block(&content));
             debug!(
@@ -354,13 +375,21 @@ pub(crate) async fn process_transcription_output(
     app: &AppHandle,
     transcription: &str,
     post_process: bool,
+    style_job: Option<&crate::styles::StyleJob>,
 ) -> ProcessedTranscription {
     let settings = get_settings(app);
     let mut final_text = transcription.to_string();
     let mut post_processed_text: Option<String> = None;
     let mut post_process_prompt: Option<String> = None;
 
-    if post_process {
+    if let Some(job) = style_job {
+        if let Some(processed_text) = run_llm_pass(&settings, &job.system_prompt, &final_text).await
+        {
+            post_processed_text = Some(processed_text.clone());
+            final_text = processed_text;
+            post_process_prompt = Some(job.system_prompt.clone());
+        }
+    } else if post_process {
         if let Some(processed_text) = post_process_transcription(&settings, &final_text).await {
             post_processed_text = Some(processed_text.clone());
             final_text = processed_text;
@@ -388,6 +417,7 @@ impl ShortcutAction for TranscribeAction {
     fn start(&self, app: &AppHandle, binding_id: &str, _shortcut_str: &str) {
         let start_time = Instant::now();
         debug!("TranscribeAction::start called for binding: {}", binding_id);
+        crate::styles::begin_recording();
 
         // Load model in the background
         let tm = app.state::<Arc<TranscriptionManager>>();
@@ -600,7 +630,8 @@ impl ShortcutAction for TranscribeAction {
         play_feedback_sound(app, SoundType::Stop);
 
         let binding_id = binding_id.to_string(); // Clone binding_id for the async task
-        let post_process = self.post_process;
+        let style_job = crate::styles::take_job(app);
+        let post_process = self.post_process || style_job.is_some();
         let cancel_generation = rm.cancel_generation();
 
         tauri::async_runtime::spawn(async move {
@@ -707,7 +738,12 @@ impl ShortcutAction for TranscribeAction {
                                 }
                             }
                             let Some(processed) = complete_unless_cancelled(
-                                process_transcription_output(&ah, &transcription, post_process),
+                                process_transcription_output(
+                                    &ah,
+                                    &transcription,
+                                    post_process,
+                                    style_job.as_ref(),
+                                ),
                                 || rm.was_cancelled_since(cancel_generation),
                             )
                             .await

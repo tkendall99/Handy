@@ -21,6 +21,7 @@ mod secure_input;
 mod settings;
 mod shortcut;
 mod signal_handle;
+mod styles;
 mod transcription_coordinator;
 mod tray;
 mod tray_i18n;
@@ -712,6 +713,8 @@ pub fn run(cli_args: CliArgs) {
             shortcut::handy_keys::stop_handy_keys_recording,
             secure_input::get_secure_input_status,
             secure_input::run_keyboard_diagnostic,
+            styles::set_styles_settings,
+            styles::get_styles_catalog,
             trigger_update_check,
             show_main_window_command,
             commands::cancel_operation,
